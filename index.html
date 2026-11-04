@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Eibiswald 380</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%231d4ed8'/><text y='70' x='50' text-anchor='middle' font-size='60'>🏠</text></svg>">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<style type="text/tailwindcss">
+@layer components{
+.card{@apply bg-white rounded-2xl shadow-md border border-sky-100 p-5 mb-4}
+.btn{@apply inline-flex items-center justify-center gap-2 rounded-xl bg-blue-700 text-white font-semibold px-5 py-3 text-lg active:bg-blue-900}
+.btn2{@apply bg-white text-blue-800 border-2 border-blue-700}
+.btn-ok{@apply bg-green-700} .btn-bad{@apply bg-red-700}
+.inp{@apply w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-lg mb-3 bg-white}
+.chip{@apply inline-block rounded-full px-3 py-1 text-base font-semibold mr-1 mb-1}
+}</style></head>
+<body class="bg-sky-50 text-slate-900 text-lg"><div id="app"></div>
+<script>
+const SB_URL='https://evhqnnvfvaruxhmagivs.supabase.co', SB_KEY='sb_publishable_CHR3dfwNom3eyGOMztGr4w_jmO2dD2D';
+const sb=supabase.createClient(SB_URL,SB_KEY);
+let me,cfg,view='home';
+const $=s=>document.querySelector(s);
+const e=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=d=>new Date(d).toLocaleDateString('de-AT');
+const today=()=>new Date().toISOString().slice(0,10);
+const v=id=>document.getElementById(id).value;
+const isAdmin=()=>me?.role==='haussprecher';
+const eur=n=>Number(n).toLocaleString('de-AT',{style:'currency',currency:'EUR'});
+const isoW=d=>{d=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));d.setUTCDate(d.getUTCDate()+4-(d.getUTCDay()||7));return Math.ceil(((d-Date.UTC(d.getUTCFullYear(),0,1))/864e5+1)/7)};
+const MODS={board:['Brett','clipboard-list','Schwarzes Brett'],events:['Termine','calendar-days','Veranstaltungen'],mow:['Mähen','tree-pine','Mähen'],clean:['Reinigung','spray-can','Reinigungsplan']};
+const card=(ic,t,b)=>`<div class="card"><h2 class="flex items-center gap-2 text-2xl font-bold text-blue-900 mb-3"><i data-lucide="${ic}" class="w-7 h-7"></i>${t}</h2>${b}</div>`;
+const run=async f=>{try{await f();await draw()}catch(x){alert(x.message||x)}};
+async function up(f){if(!f)return null;const p=`${me.apartment}/${Date.now()}-${f.name.replace(/[^\w.-]/g,'_')}`;const{error}=await sb.storage.from('files').upload(p,f);if(error)throw error;return sb.storage.from('files').getPublicUrl(p).data.publicUrl}
+const fileLink=u=>u?`<a class="text-blue-700 underline flex gap-1 items-center my-2" href="${e(u)}" target="_blank"><i data-lucide="paperclip" class="w-5 h-5"></i>Datei öffnen</a>`:'';
+
+/* ---------- Start / Login ---------- */
+async function init(){
+  const{data:{session}}=await sb.auth.getSession();
+  if(!session)return loginView();
+  const{data:p}=await sb.from('profiles').select().eq('id',session.user.id).single();
+  me=p;await sb.rpc('cleanup_expired');await loadCfg();
+  sb.channel('s').on('postgres_changes',{event:'*',schema:'public',table:'settings'},async()=>{await loadCfg();draw()}).subscribe();
+  draw();
+}
+async function loadCfg(){cfg=(await sb.from('settings').select().eq('id',1).single()).data}
+function loginView(){
+  $('#app').innerHTML=`<div class="max-w-md mx-auto p-6 pt-16"><div class="text-center mb-8"><div class="text-6xl">🏠</div><h1 class="text-4xl font-extrabold text-blue-900 mt-2">Eibiswald 380</h1><p>Hausverwaltung</p></div>
+  <div class="card"><label class="font-semibold">Wohnung</label><select id="l_a" class="inp">${[1,2,3,4,5,6,7,8,9].map(i=>`<option value="${i}">Wohnung ${i}</option>`).join('')}</select>
+  <label class="font-semibold">Passwort</label><input id="l_p" type="password" class="inp" autocomplete="current-password">
+  <button class="btn w-full" onclick="login()">Anmelden</button></div></div>`;
+}
+async function login(){
+  const{error}=await sb.auth.signInWithPassword({email:`whg${v('l_a')}@eibiswald380.app`,password:v('l_p')});
+  if(error)return alert('Anmeldung fehlgeschlagen. Bitte Wohnung und Passwort prüfen.');
+  init();
+}
+async function logout(){await sb.auth.signOut();location.reload()}
+
+/* ---------- Layout ---------- */
+const views={};
+const go=x=>{view=x;draw()};
+async function draw(){
+  const tabs=[['home','Start','house'],...Object.entries(MODS).filter(([k])=>cfg.modules[k]).map(([k,m])=>[k,m[0],m[1]]),...(isAdmin()?[['admin','Admin','settings']]:[])];
+  if(!tabs.some(t=>t[0]===view))view='home';
+  $('#app').innerHTML=`<header class="bg-blue-800 text-white px-4 py-3 flex justify-between items-center sticky top-0 z-10"><div><b class="text-xl">Eibiswald 380</b><div class="text-base">Wohnung ${me.apartment}${isAdmin()?' · Haussprecher':''}</div></div><button onclick="logout()" class="flex items-center gap-1 text-base underline"><i data-lucide="log-out" class="w-5 h-5"></i>Abmelden</button></header>
+  <main id="main" class="max-w-3xl mx-auto p-4 pb-28"></main>
+  <nav class="fixed bottom-0 inset-x-0 bg-white border-t-2 border-sky-200 flex justify-around z-10">${tabs.map(t=>`<button onclick="go('${t[0]}')" class="flex-1 py-2 flex flex-col items-center text-sm font-semibold ${view===t[0]?'text-blue-800 bg-sky-100':'text-slate-600'}"><i data-lucide="${t[2]}" class="w-7 h-7"></i>${t[1]}</button>`).join('')}</nav>`;
+  $('#main').innerHTML=await views[view]();lucide.createIcons();
+}
+
+/* ---------- Reinigung (Hilfsfunktionen) ---------- */
+async function cleanData(){
+  const y=new Date().getFullYear(),[p,d]=await Promise.all([sb.from('cleaning_plans').select().eq('year',y).maybeSingle(),sb.from('cleaning_done').select().eq('year',y)]);
+  return{y,p:p.data,done:d.data||[]};
+}
+const grp=(p,w)=>p['w'+((w-1)%3+1)];
+function cleanStatus(c,w,a){
+  if(c.done.some(x=>x.week===w&&x.apartment===a))return'done';
+  const cw=isoW(new Date());return w<cw?'over':w===cw?'now':'future';
+}
+const CS={done:['bg-green-100 text-green-900','✔ erledigt'],over:['bg-red-200 text-red-900','! überfällig'],now:['bg-amber-200 text-amber-900','diese Woche'],future:['bg-slate-100 text-slate-700','offen']};
+
+/* ---------- Dashboard ---------- */
+views.home=async()=>{
+  let h='';const t=today(),items=[];
+  if(cfg.modules.events){const{data}=await sb.from('events').select('*').gte('date',t).order('date').limit(5);(data||[]).forEach(x=>items.push([x.date,'calendar-days',`${e(x.title)} ${e(x.time?.slice(0,5)||'')}`]))}
+  if(cfg.modules.mow){
+    const{data:md}=await sb.from('mow_dates').select('*').gte('date',t).order('date').limit(3);(md||[]).forEach(x=>items.push([x.date,'tree-pine',`Mähen${x.big?' (große Wiese)':''}`]));
+    const{data:pay}=await sb.from('mow_payments').select('*,mow_seasons(*)').eq('apartment',me.apartment).neq('status','confirmed');
+    const sum=(pay||[]).reduce((s,x)=>s+Number(x.mow_seasons.price),0),late=(pay||[]).some(x=>x.mow_seasons.due_date<t&&x.status==='open');
+    if(pay?.length)h+=card('euro','Offener Mähbetrag',`<p class="text-3xl font-extrabold ${late?'text-red-700':'text-blue-900'}">${eur(sum)}</p>${late?'<p class="text-red-700 font-bold">⚠ Zahlung überfällig</p>':''}${pay.some(x=>x.status!=='open')?'<p>Gemeldet – Bestätigung durch Haussprecher offen.</p>':''}`);
+  }
+  if(cfg.modules.clean){
+    const c=await cleanData();let txt='<p>Kein Plan hinterlegt.</p>';
+    if(c.p){const cw=isoW(new Date());for(let w=1;w<=52;w++){if(!grp(c.p,w).includes(me.apartment))continue;const s=cleanStatus(c,w,me.apartment);if(s==='done'||(s==='future'&&w<cw))continue;
+      txt=`<p class="text-2xl font-bold ${s==='over'?'text-red-700':''}">KW ${w} ${s==='over'?'– überfällig!':s==='now'?'– diese Woche':''}</p>`;if(s!=='over')items.push([null]);break}}
+    h=card('spray-can','Mein nächster Reinigungstermin',txt)+h;
+  }
+  const list=items.filter(i=>i[0]).sort((a,b)=>a[0]>b[0]?1:-1).map(i=>`<div class="flex items-center gap-3 py-2 border-b border-sky-100"><i data-lucide="${i[1]}" class="w-6 h-6 text-blue-700"></i><b>${fmt(i[0])}</b><span>${i[2]}</span></div>`).join('');
+  return h+card('calendar','Demnächst',list||'<p>Nichts geplant.</p>');
+};
+
+/* ---------- Schwarzes Brett ---------- */
+views.board=async()=>{
+  const{data}=await sb.from('posts').select().order('created_at',{ascending:false});
+  return card('plus-circle','Neuer Beitrag',`<input id="p_t" class="inp" placeholder="Titel"><textarea id="p_b" class="inp" rows="3" placeholder="Text"></textarea><input id="p_f" type="file" class="inp"><button class="btn" onclick="addPost()">Veröffentlichen</button>`)+
+  (data||[]).map(p=>card('pin',e(p.title),`<p class="whitespace-pre-line">${e(p.body)}</p>${fileLink(p.file_url)}<p class="text-base text-slate-600 mt-2">Wohnung ${p.author_apt} · ${fmt(p.created_at)}</p>${isAdmin()||p.author===me.id?`<div class="flex gap-2 mt-3"><button class="btn btn2" onclick="editPost(${p.id})">Bearbeiten</button><button class="btn btn-bad" onclick="delRow('posts',${p.id})">Löschen</button></div>`:''}`)).join('');
+};
+const addPost=()=>run(async()=>{const f=$('#p_f').files[0],u=await up(f);const{error}=await sb.from('posts').insert({title:v('p_t'),body:v('p_b'),file_url:u,author_apt:me.apartment});if(error)throw error});
+const editPost=id=>run(async()=>{const t=prompt('Neuer Titel?');if(t===null)return;const b=prompt('Neuer Text?');await sb.from('posts').update({title:t,body:b}).eq('id',id)});
+const delRow=(t,id)=>confirm('Wirklich löschen?')&&run(async()=>{const{error}=await sb.from(t).delete().eq('id',id);if(error)throw error});
+
+/* ---------- Veranstaltungen ---------- */
+views.events=async()=>{
+  const[{data:ev},{data:rs}]=await Promise.all([sb.from('events').select().gte('date',today()).order('date'),sb.from('event_rsvps').select()]);
+  return card('plus-circle','Neue Veranstaltung',`<input id="e_t" class="inp" placeholder="Titel"><input id="e_d" type="date" class="inp"><input id="e_h" type="time" class="inp"><input id="e_o" class="inp" placeholder="Ort"><input id="e_f" type="file" class="inp"><button class="btn" onclick="addEv()">Speichern</button>`)+
+  (ev||[]).map(x=>{const r=(rs||[]).filter(q=>q.event_id===x.id),mine=r.find(q=>q.apartment===me.apartment),n=g=>r.filter(q=>q.going===g).map(q=>q.apartment).sort().join(', ')||'–';
+  return card('calendar-days',e(x.title),`<p class="font-bold">${fmt(x.date)} ${e(x.time?.slice(0,5)||'')} · ${e(x.place||'')}</p>${fileLink(x.file_url)}
+  <div class="flex gap-2 my-3 flex-wrap"><button class="btn ${mine?.going===true?'btn-ok':'btn2'}" onclick="rsvp(${x.id},true)">✔ Wir sind dabei</button><button class="btn ${mine?.going===false?'btn-bad':'btn2'}" onclick="rsvp(${x.id},false)">✖ Nicht dabei</button></div>
+  <p><b class="text-green-800">Dabei:</b> Whg ${n(true)}</p><p><b class="text-red-800">Nicht dabei:</b> Whg ${n(false)}</p>
+  ${isAdmin()||x.author===me.id?`<div class="flex gap-2 mt-3"><button class="btn btn2" onclick="editEv(${x.id})">Bearbeiten</button><button class="btn btn-bad" onclick="delRow('events',${x.id})">Löschen</button></div>`:''}`)}).join('')||card('calendar-days','Keine Veranstaltungen','');
+};
+const addEv=()=>run(async()=>{const u=await up($('#e_f').files[0]);const{error}=await sb.from('events').insert({title:v('e_t'),date:v('e_d'),time:v('e_h')||null,place:v('e_o'),file_url:u});if(error)throw error});
+const rsvp=(id,g)=>run(async()=>{await sb.from('event_rsvps').upsert({event_id:id,apartment:me.apartment,going:g})});
+const editEv=id=>run(async()=>{const t=prompt('Neuer Titel?');if(t===null)return;const d=prompt('Neues Datum (JJJJ-MM-TT)?');const o=prompt('Neuer Ort?');const u={title:t,place:o};if(d)u.date=d;const{error}=await sb.from('events').update(u).eq('id',id);if(error)throw error});
+
+/* ---------- Mähen ---------- */
+const logIt=(sid,apt,text)=>sb.from('mow_log').insert({season_id:sid,apartment:apt,by_name:isAdmin()?'Haussprecher (Whg '+me.apartment+')':'Wohnung '+me.apartment,text});
+const PS={open:['bg-red-100 text-red-900','offen'],cash:['bg-amber-200 text-amber-900','bar übergeben – Bestätigung offen'],deposit:['bg-amber-200 text-amber-900','hinterlegt – Bestätigung offen'],confirmed:['bg-green-100 text-green-900','bezahlt ✔']};
+views.mow=async()=>{
+  const[{data:se},{data:pay},{data:md},{data:lg}]=await Promise.all([sb.from('mow_seasons').select().order('due_date',{ascending:false}),sb.from('mow_payments').select().order('apartment'),sb.from('mow_dates').select().order('date'),sb.from('mow_log').select().order('at',{ascending:false})]);
+  const t=today();
+  return (se||[]).map(s=>{
+    const mine=pay.find(p=>p.season_id===s.id&&p.apartment===me.apartment),dl=Math.ceil((new Date(s.due_date)-new Date(t))/864e5);
+    const warn=mine&&mine.status==='open'?(dl<0?'<p class="text-red-700 font-bold text-xl">⚠ Überfällig seit '+fmt(s.due_date)+'</p>':dl<=s.remind_days?`<p class="text-amber-800 font-bold">Erinnerung: fällig in ${dl} Tagen</p>`:''):'';
+    const dates=md.filter(d=>d.season_id===s.id).map(d=>`<span class="chip bg-sky-100 text-blue-900">${fmt(d.date)}${d.big?' 🌿 große Wiese':''}</span>`).join('')||'–';
+    let body=`<p class="text-2xl font-extrabold">${eur(s.price)} <span class="text-base font-normal">je Wohnung · fällig ${fmt(s.due_date)}</span></p>${warn}<p class="font-semibold mt-2">Mähtermine:</p><div>${dates}</div>`;
+    if(mine){const st=PS[mine.status];body+=`<p class="mt-3"><span class="chip ${st[0]}">${st[1]}</span>${mine.deposit_place?` Ort: ${e(mine.deposit_place)}`:''}</p>`;
+      if(mine.status==='open')body+=`<div class="flex gap-2 flex-wrap mt-2"><button class="btn" onclick="payRep(${mine.id},${s.id},'cash')">In bar übergeben</button><button class="btn btn2" onclick="payRep(${mine.id},${s.id},'deposit')">Hinterlegt</button></div>`}
+    if(isAdmin()){body+=`<h3 class="font-bold mt-4 mb-2">Zahlungen aller Wohnungen</h3>`+pay.filter(p=>p.season_id===s.id).map(p=>`<div class="flex justify-between items-center py-2 border-b gap-2 flex-wrap"><span>Whg ${p.apartment}: <span class="chip ${PS[p.status][0]}">${PS[p.status][1]}</span>${p.deposit_place?`<br>Ort: ${e(p.deposit_place)}`:''}</span>${p.status==='confirmed'?`<button class="btn btn2" onclick="payAdm(${p.id},${s.id},${p.apartment},'open')">Zurücksetzen</button>`:`<button class="btn btn-ok" onclick="payAdm(${p.id},${s.id},${p.apartment},'confirmed')">Bestätigen</button>`}</span></div>`).join('')+
+      `<div class="flex gap-2 mt-3 flex-wrap"><button class="btn btn2" onclick="editPrice(${s.id},${s.price})">Preis ändern</button><button class="btn btn-bad" onclick="delRow('mow_seasons',${s.id})">Saison löschen</button></div>`}
+    const L=lg.filter(l=>l.season_id===s.id&&(isAdmin()||l.apartment===me.apartment)).slice(0,15);
+    body+=`<details class="mt-4"><summary class="font-semibold cursor-pointer">Änderungshistorie</summary>${L.map(l=>`<p class="text-base border-b py-1">${new Date(l.at).toLocaleString('de-AT')} · <b>${e(l.by_name)}</b>: ${e(l.text)}</p>`).join('')||'<p>Keine Einträge.</p>'}</details>`;
+    return card('tree-pine',e(s.name),body)}).join('')||card('tree-pine','Keine Mähsaison angelegt','<p>Der Haussprecher legt sie im Admin-Bereich an.</p>');
+};
+const payRep=(id,sid,st)=>run(async()=>{let pl=null;if(st==='deposit'){pl=prompt('Wo wurde das Geld hinterlegt? (Pflichtangabe)\nHinweis: Bitte in einem Kuvert mit Wohnungsnummer hinterlegen.');if(!pl?.trim())throw new Error('Hinterlegungsort ist Pflicht.')}
+  const{error}=await sb.from('mow_payments').update({status:st,deposit_place:pl}).eq('id',id);if(error)throw error;await logIt(sid,me.apartment,st==='cash'?'Zahlung „in bar übergeben“ gemeldet':'Zahlung „hinterlegt“ gemeldet: '+pl)});
+const payAdm=(id,sid,apt,st)=>run(async()=>{const{error}=await sb.from('mow_payments').update({status:st}).eq('id',id);if(error)throw error;await logIt(sid,apt,`Whg ${apt}: ${st==='confirmed'?'Zahlung bestätigt':'Bestätigung zurückgesetzt'}`)});
+const editPrice=(sid,old)=>run(async()=>{const n=prompt('Neuer Preis in €?',old);if(!n)return;await sb.from('mow_seasons').update({price:Number(n.replace(',','.'))}).eq('id',sid);await logIt(sid,null,`Preis geändert von ${eur(old)} auf ${eur(n.replace(',','.'))}`)});
+
+/* ---------- Reinigung ---------- */
+views.clean=async()=>{
+  const c=await cleanData();if(!c.p)return card('spray-can','Reinigungsplan '+c.y,'<p>Noch kein Plan angelegt (Admin-Bereich).</p>');
+  const cw=isoW(new Date());let h='';
+  for(let w=1;w<=52;w++){h+=`<div class="py-3 border-b ${w===cw?'bg-sky-100 rounded-xl px-2':''}"><b class="text-xl">KW ${w}${w===cw?' (jetzt)':''}</b><div class="mt-1">${grp(c.p,w).map(a=>{const s=cleanStatus(c,w,a);return`<span class="chip ${CS[s][0]}">Whg ${a}: ${CS[s][1]}</span>${(a===me.apartment||isAdmin())&&s!=='done'&&s!=='future'?`<button class="btn btn-ok !py-1 !px-3 !text-base mr-2" onclick="cDone(${c.y},${w},${a})">Erledigt</button>`:''}${isAdmin()&&s==='done'?`<button class="text-sm underline mr-2" onclick="cUndo(${c.y},${w},${a})">zurück</button>`:''}`}).join('')}</div></div>`}
+  return card('spray-can','Reinigungsplan '+c.y,h);
+};
+const cDone=(y,w,a)=>run(async()=>{const{error}=await sb.from('cleaning_done').insert({year:y,week:w,apartment:a});if(error)throw error});
+const cUndo=(y,w,a)=>run(async()=>{await sb.from('cleaning_done').delete().match({year:y,week:w,apartment:a})});
+
+/* ---------- Admin ---------- */
+views.admin=async()=>{
+  const{data:se}=await sb.from('mow_seasons').select();const c=await cleanData();
+  return card('toggle-right','Module ein-/ausschalten',Object.entries(MODS).map(([k,m])=>`<label class="flex items-center justify-between py-3 border-b"><span>${m[2]}</span><input type="checkbox" class="w-8 h-8" ${cfg.modules[k]?'checked':''} onchange="setMod('${k}',this.checked)"></label>`).join(''))+
+  card('timer','Schwarzes Brett: Aufbewahrung',`<label>Beiträge löschen nach (Tagen)</label><input id="a_ret" type="number" min="1" class="inp" value="${cfg.retention_days}"><button class="btn" onclick="setRet()">Speichern</button>`)+
+  card('key-round','Passwörter der Bewohner',[1,2,3,4,5,6,7,8,9].map(i=>`<div class="flex gap-2 mb-2 items-center"><b class="w-24 shrink-0">Whg ${i}</b><input id="pw${i}" class="inp !mb-0" placeholder="Neues Passwort"><button class="btn !px-3" onclick="setPw(${i})"><i data-lucide="check"></i></button></div>`).join('')+'<p class="text-base mt-2">Mindestens 6 Zeichen.</p>')+
+  card('tree-pine','Neue Mähsaison',`<input id="s_n" class="inp" placeholder="z. B. Sommer 2026"><input id="s_p" type="number" step="0.01" class="inp" placeholder="Preis je Wohnung (€)"><label>Fällig am</label><input id="s_d" type="date" class="inp"><label>Erinnerung (Tage vor Fälligkeit)</label><input id="s_r" type="number" class="inp" value="14"><button class="btn" onclick="addSeason()">Saison anlegen</button>`)+
+  card('scissors','Mähtermin eintragen',`<select id="m_s" class="inp">${(se||[]).map(s=>`<option value="${s.id}">${e(s.name)}</option>`).join('')}</select><input id="m_d" type="date" class="inp"><label class="flex gap-3 items-center mb-3"><input id="m_b" type="checkbox" class="w-7 h-7">Große Wiese</label><button class="btn" onclick="addMow()">Termin speichern</button>`)+
+  card('spray-can','Reinigungsplan '+c.y,`<p class="mb-2">Wohnungen der ersten 3 Wochen (Komma-getrennt). Der Turnus wird für das ganze Jahr fortgeschrieben.</p>${[1,2,3].map(n=>`<label>KW ${n}</label><input id="c${n}" class="inp" value="${c.p?c.p['w'+n].join(', '):[[1,4,7],[2,5,8],[3,6,9]][n-1].join(', ')}">`).join('')}<button class="btn" onclick="savePlan(${c.y})">Plan speichern</button>`);
+};
+const setMod=(k,on)=>run(async()=>{cfg.modules[k]=on;const{error}=await sb.from('settings').update({modules:cfg.modules}).eq('id',1);if(error)throw error});
+const setRet=()=>run(async()=>{const{error}=await sb.from('settings').update({retention_days:+v('a_ret')}).eq('id',1);if(error)throw error;await loadCfg();alert('Gespeichert')});
+const setPw=i=>run(async()=>{const{error}=await sb.rpc('admin_set_password',{p_apartment:i,p_password:v('pw'+i)});if(error)throw error;$('#pw'+i).value='';alert(`Passwort für Wohnung ${i} gesetzt.`)});
+const addSeason=()=>run(async()=>{const{data:s,error}=await sb.from('mow_seasons').insert({name:v('s_n'),price:+v('s_p'),due_date:v('s_d'),remind_days:+v('s_r')}).select().single();if(error)throw error;
+  await sb.from('mow_payments').insert([1,2,3,4,5,6,7,8,9].map(a=>({season_id:s.id,apartment:a})));await logIt(s.id,null,`Saison angelegt, Preis ${eur(s.price)}`);alert('Saison angelegt.')});
+const addMow=()=>run(async()=>{const{error}=await sb.from('mow_dates').insert({season_id:+v('m_s'),date:v('m_d'),big:$('#m_b').checked});if(error)throw error;await logIt(+v('m_s'),null,`Mähtermin ${fmt(v('m_d'))} eingetragen${$('#m_b').checked?' (große Wiese)':''}`)});
+const savePlan=y=>run(async()=>{const a=n=>v('c'+n).split(',').map(x=>+x.trim()).filter(Boolean);const{error}=await sb.from('cleaning_plans').upsert({year:y,w1:a(1),w2:a(2),w3:a(3)});if(error)throw error;alert('Plan gespeichert.')});
+
+init();
+</script></body></html>
