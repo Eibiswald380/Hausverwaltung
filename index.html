@@ -14,12 +14,18 @@
 .btn-ok{@apply bg-green-700} .btn-bad{@apply bg-red-700}
 .inp{@apply w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-lg mb-3 bg-white}
 .chip{@apply inline-block rounded-full px-3 py-1 text-base font-semibold mr-1 mb-1}
-}</style></head>
+}</style>
+<style>
+.inp{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+input[type=date].inp,input[type=time].inp{-webkit-appearance:none;appearance:none;min-height:3.6rem;text-align:left;overflow:hidden}
+input[type=date].inp::-webkit-date-and-time-value,input[type=time].inp::-webkit-date-and-time-value{text-align:left;min-width:0}
+input[type=file].inp{font-size:1rem}
+</style></head>
 <body class="bg-sky-50 text-slate-900 text-lg"><div id="app"></div>
 <script>
 const SB_URL='https://evhqnnvfvaruxhmagivs.supabase.co', SB_KEY='sb_publishable_CHR3dfwNom3eyGOMztGr4w_jmO2dD2D';
 const sb=supabase.createClient(SB_URL,SB_KEY);
-let me,cfg,view='home';
+let me,cfg,view='home',admY;
 const $=s=>document.querySelector(s);
 const e=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=d=>new Date(d).toLocaleDateString('de-AT');
@@ -28,6 +34,11 @@ const v=id=>document.getElementById(id).value;
 const isAdmin=()=>me?.role==='haussprecher';
 const eur=n=>Number(n).toLocaleString('de-AT',{style:'currency',currency:'EUR'});
 const isoW=d=>{d=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));d.setUTCDate(d.getUTCDate()+4-(d.getUTCDay()||7));return Math.ceil(((d-Date.UTC(d.getUTCFullYear(),0,1))/864e5+1)/7)};
+const isoY=d=>{d=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));d.setUTCDate(d.getUTCDate()+4-(d.getUTCDay()||7));return d.getUTCFullYear()};
+const weeksIn=y=>isoW(new Date(y,11,28));
+function greet(){const d=new Date(),m=d.getMonth()+1,t=d.getDate(),h=d.getHours();
+  if(m===12&&t>=24&&t<=26)return'Frohe Weihnachten 🎄';if(m===1&&t===1)return'Frohes neues Jahr 🎆';
+  return h>=3&&h<9?'Guten Morgen ☀️':h>=9&&h<17?'Schönen Tag 🌤️':h>=17&&h<21?'Schönen Abend 🌇':'Gute Nacht 🌙'}
 const MODS={board:['Brett','clipboard-list','Schwarzes Brett'],events:['Termine','calendar-days','Veranstaltungen'],mow:['Mähen','tree-pine','Mähen'],clean:['Reinigung','spray-can','Reinigungsplan']};
 const card=(ic,t,b)=>`<div class="card"><h2 class="flex items-center gap-2 text-2xl font-bold text-blue-900 mb-3"><i data-lucide="${ic}" class="w-7 h-7"></i>${t}</h2>${b}</div>`;
 const run=async f=>{try{await f();await draw()}catch(x){alert(x.message||x)}};
@@ -70,8 +81,8 @@ async function draw(){
 }
 
 /* ---------- Reinigung (Hilfsfunktionen) ---------- */
-async function cleanData(){
-  const y=new Date().getFullYear(),[p,d]=await Promise.all([sb.from('cleaning_plans').select().eq('year',y).maybeSingle(),sb.from('cleaning_done').select().eq('year',y)]);
+async function cleanData(y){
+  y=y||isoY(new Date());const[p,d]=await Promise.all([sb.from('cleaning_plans').select().eq('year',y).maybeSingle(),sb.from('cleaning_done').select().eq('year',y)]);
   return{y,p:p.data,done:d.data||[]};
 }
 const grp=(p,w)=>p['w'+((w-1)%3+1)];
@@ -83,21 +94,28 @@ const CS={done:['bg-green-100 text-green-900','✔ erledigt'],over:['bg-red-200 
 
 /* ---------- Dashboard ---------- */
 views.home=async()=>{
-  let h='';const t=today(),items=[];
-  if(cfg.modules.events){const{data}=await sb.from('events').select('*').gte('date',t).order('date').limit(5);(data||[]).forEach(x=>items.push([x.date,'calendar-days',`${e(x.title)} ${e(x.time?.slice(0,5)||'')}`]))}
+  let h=`<h1 class="text-3xl font-extrabold text-blue-900 mb-4">${greet()}, Wohnung ${me.apartment}!</h1>`;const t=today(),items=[];
+  if(cfg.modules.clean){
+    const c=await cleanData();let b='<p>Kein Plan hinterlegt.</p>';
+    if(c.p){let rows='',nxt=false;
+      for(let w=1;w<=weeksIn(c.y)&&!nxt;w++){if(!grp(c.p,w).includes(me.apartment))continue;const s=cleanStatus(c,w,me.apartment);if(s==='done')continue;if(s==='future')nxt=true;
+        rows+=`<div class="flex items-center justify-between gap-2 py-2 border-b flex-wrap"><span class="chip ${CS[s][0]}">KW ${w}: ${CS[s][1]}</span>${s!=='future'?`<button class="btn btn-ok" onclick="cDone(${c.y},${w},${me.apartment})">Erledigt</button>`:''}</div>`}
+      b=rows||'<p>Alles erledigt 🎉</p>'}
+    h+=card('spray-can','Meine Reinigung',b);
+  }
   if(cfg.modules.mow){
     const{data:md}=await sb.from('mow_dates').select('*').gte('date',t).order('date').limit(3);(md||[]).forEach(x=>items.push([x.date,'tree-pine',`Mähen${x.big?' (große Wiese)':''}`]));
     const{data:pay}=await sb.from('mow_payments').select('*,mow_seasons(*)').eq('apartment',me.apartment).neq('status','confirmed');
-    const sum=(pay||[]).reduce((s,x)=>s+Number(x.mow_seasons.price),0),late=(pay||[]).some(x=>x.mow_seasons.due_date<t&&x.status==='open');
-    if(pay?.length)h+=card('euro','Offener Mähbetrag',`<p class="text-3xl font-extrabold ${late?'text-red-700':'text-blue-900'}">${eur(sum)}</p>${late?'<p class="text-red-700 font-bold">⚠ Zahlung überfällig</p>':''}${pay.some(x=>x.status!=='open')?'<p>Gemeldet – Bestätigung durch Haussprecher offen.</p>':''}`);
+    if(pay?.length)h+=card('euro','Mähen: offene Zahlungen',pay.map(x=>{const s=x.mow_seasons,late=s.due_date<t&&x.status==='open';
+      return`<div class="py-3 border-b"><p class="text-2xl font-extrabold ${late?'text-red-700':'text-blue-900'}">${eur(s.price)} <span class="text-base font-normal">${e(s.name)} · fällig ${fmt(s.due_date)}</span></p>${late?'<p class="text-red-700 font-bold">⚠ Überfällig</p>':''}${x.status==='open'?`<div class="flex gap-2 flex-wrap mt-2"><button class="btn" onclick="payRep(${x.id},${s.id},'cash')">In bar übergeben</button><button class="btn btn2" onclick="payRep(${x.id},${s.id},'deposit')">Hinterlegt</button></div>`:`<p class="mt-1"><span class="chip ${PS[x.status][0]}">${PS[x.status][1]}</span>${x.deposit_place?' Ort: '+e(x.deposit_place):''}</p>`}</div>`}).join(''));
   }
-  if(cfg.modules.clean){
-    const c=await cleanData();let txt='<p>Kein Plan hinterlegt.</p>';
-    if(c.p){const cw=isoW(new Date());for(let w=1;w<=52;w++){if(!grp(c.p,w).includes(me.apartment))continue;const s=cleanStatus(c,w,me.apartment);if(s==='done'||(s==='future'&&w<cw))continue;
-      txt=`<p class="text-2xl font-bold ${s==='over'?'text-red-700':''}">KW ${w} ${s==='over'?'– überfällig!':s==='now'?'– diese Woche':''}</p>`;if(s!=='over')items.push([null]);break}}
-    h=card('spray-can','Mein nächster Reinigungstermin',txt)+h;
+  if(cfg.modules.events){
+    const[{data:ev},{data:rs}]=await Promise.all([sb.from('events').select().gte('date',t).order('date').limit(5),sb.from('event_rsvps').select().eq('apartment',me.apartment)]);
+    if(ev?.length)h+=card('calendar-days','Veranstaltungen',ev.map(x=>{const g=(rs||[]).find(q=>q.event_id===x.id)?.going;
+      return`<div class="py-3 border-b"><p class="font-bold">${fmt(x.date)} ${e(x.time?.slice(0,5)||'')} · ${e(x.title)}</p><div class="flex gap-2 flex-wrap mt-2"><button class="btn ${g===true?'btn-ok':'btn2'}" onclick="rsvp(${x.id},true)">✔ Wir sind dabei</button><button class="btn ${g===false?'btn-bad':'btn2'}" onclick="rsvp(${x.id},false)">✖ Nicht dabei</button></div></div>`}).join(''));
+    (ev||[]).forEach(x=>items.push([x.date,'calendar-days',`${e(x.title)} ${e(x.time?.slice(0,5)||'')}`]));
   }
-  const list=items.filter(i=>i[0]).sort((a,b)=>a[0]>b[0]?1:-1).map(i=>`<div class="flex items-center gap-3 py-2 border-b border-sky-100"><i data-lucide="${i[1]}" class="w-6 h-6 text-blue-700"></i><b>${fmt(i[0])}</b><span>${i[2]}</span></div>`).join('');
+  const list=items.sort((a,b)=>a[0]>b[0]?1:-1).map(i=>`<div class="flex items-center gap-3 py-2 border-b border-sky-100"><i data-lucide="${i[1]}" class="w-6 h-6 text-blue-700"></i><b>${fmt(i[0])}</b><span>${i[2]}</span></div>`).join('');
   return h+card('calendar','Demnächst',list||'<p>Nichts geplant.</p>');
 };
 
@@ -153,7 +171,7 @@ const editPrice=(sid,old)=>run(async()=>{const n=prompt('Neuer Preis in €?',ol
 views.clean=async()=>{
   const c=await cleanData();if(!c.p)return card('spray-can','Reinigungsplan '+c.y,'<p>Noch kein Plan angelegt (Admin-Bereich).</p>');
   const cw=isoW(new Date());let h='';
-  for(let w=1;w<=52;w++){h+=`<div class="py-3 border-b ${w===cw?'bg-sky-100 rounded-xl px-2':''}"><b class="text-xl">KW ${w}${w===cw?' (jetzt)':''}</b><div class="mt-1">${grp(c.p,w).map(a=>{const s=cleanStatus(c,w,a);return`<span class="chip ${CS[s][0]}">Whg ${a}: ${CS[s][1]}</span>${(a===me.apartment||isAdmin())&&s!=='done'&&s!=='future'?`<button class="btn btn-ok !py-1 !px-3 !text-base mr-2" onclick="cDone(${c.y},${w},${a})">Erledigt</button>`:''}${isAdmin()&&s==='done'?`<button class="text-sm underline mr-2" onclick="cUndo(${c.y},${w},${a})">zurück</button>`:''}`}).join('')}</div></div>`}
+  for(let w=1;w<=weeksIn(c.y);w++){h+=`<div class="py-3 border-b ${w===cw?'bg-sky-100 rounded-xl px-2':''}"><b class="text-xl">KW ${w}${w===cw?' (jetzt)':''}</b><div class="mt-1">${grp(c.p,w).map(a=>{const s=cleanStatus(c,w,a);return`<span class="chip ${CS[s][0]}">Whg ${a}: ${CS[s][1]}</span>${(a===me.apartment||isAdmin())&&s!=='done'&&s!=='future'?`<button class="btn btn-ok !py-1 !px-3 !text-base mr-2" onclick="cDone(${c.y},${w},${a})">Erledigt</button>`:''}${isAdmin()&&s==='done'?`<button class="text-sm underline mr-2" onclick="cUndo(${c.y},${w},${a})">zurück</button>`:''}`}).join('')}</div></div>`}
   return card('spray-can','Reinigungsplan '+c.y,h);
 };
 const cDone=(y,w,a)=>run(async()=>{const{error}=await sb.from('cleaning_done').insert({year:y,week:w,apartment:a});if(error)throw error});
@@ -161,13 +179,13 @@ const cUndo=(y,w,a)=>run(async()=>{await sb.from('cleaning_done').delete().match
 
 /* ---------- Admin ---------- */
 views.admin=async()=>{
-  const{data:se}=await sb.from('mow_seasons').select();const c=await cleanData();
+  const{data:se}=await sb.from('mow_seasons').select();const c=await cleanData(admY),cy=isoY(new Date());
   return card('toggle-right','Module ein-/ausschalten',Object.entries(MODS).map(([k,m])=>`<label class="flex items-center justify-between py-3 border-b"><span>${m[2]}</span><input type="checkbox" class="w-8 h-8" ${cfg.modules[k]?'checked':''} onchange="setMod('${k}',this.checked)"></label>`).join(''))+
   card('timer','Schwarzes Brett: Aufbewahrung',`<label>Beiträge löschen nach (Tagen)</label><input id="a_ret" type="number" min="1" class="inp" value="${cfg.retention_days}"><button class="btn" onclick="setRet()">Speichern</button>`)+
   card('key-round','Passwörter der Bewohner',[1,2,3,4,5,6,7,8,9].map(i=>`<div class="flex gap-2 mb-2 items-center"><b class="w-24 shrink-0">Whg ${i}</b><input id="pw${i}" class="inp !mb-0" placeholder="Neues Passwort"><button class="btn !px-3" onclick="setPw(${i})"><i data-lucide="check"></i></button></div>`).join('')+'<p class="text-base mt-2">Mindestens 6 Zeichen.</p>')+
   card('tree-pine','Neue Mähsaison',`<input id="s_n" class="inp" placeholder="z. B. Sommer 2026"><input id="s_p" type="number" step="0.01" class="inp" placeholder="Preis je Wohnung (€)"><label>Fällig am</label><input id="s_d" type="date" class="inp"><label>Erinnerung (Tage vor Fälligkeit)</label><input id="s_r" type="number" class="inp" value="14"><button class="btn" onclick="addSeason()">Saison anlegen</button>`)+
   card('scissors','Mähtermin eintragen',`<select id="m_s" class="inp">${(se||[]).map(s=>`<option value="${s.id}">${e(s.name)}</option>`).join('')}</select><input id="m_d" type="date" class="inp"><label class="flex gap-3 items-center mb-3"><input id="m_b" type="checkbox" class="w-7 h-7">Große Wiese</label><button class="btn" onclick="addMow()">Termin speichern</button>`)+
-  card('spray-can','Reinigungsplan '+c.y,`<p class="mb-2">Wohnungen der ersten 3 Wochen (Komma-getrennt). Der Turnus wird für das ganze Jahr fortgeschrieben.</p>${[1,2,3].map(n=>`<label>KW ${n}</label><input id="c${n}" class="inp" value="${c.p?c.p['w'+n].join(', '):[[1,4,7],[2,5,8],[3,6,9]][n-1].join(', ')}">`).join('')}<button class="btn" onclick="savePlan(${c.y})">Plan speichern</button>`);
+  card('spray-can','Reinigungsplan '+c.y,`<label class="font-semibold">Jahr</label><select class="inp" onchange="setY(this.value)">${[0,1,2,3].map(i=>`<option ${cy+i===c.y?'selected':''}>${cy+i}</option>`).join('')}</select><p class="mb-2">Wohnungen der ersten 3 Wochen (Komma-getrennt). Der Turnus wird für das ganze Jahr fortgeschrieben.</p>${[1,2,3].map(n=>`<label>KW ${n}</label><input id="c${n}" class="inp" value="${c.p?c.p['w'+n].join(', '):[[1,4,7],[2,5,8],[3,6,9]][n-1].join(', ')}">`).join('')}<div class="flex gap-2 flex-wrap"><button class="btn" onclick="savePlan(${c.y})">Plan speichern</button><button class="btn btn2" onclick="carry(${c.y})">Turnus aus ${c.y-1} fortschreiben</button></div>`);
 };
 const setMod=(k,on)=>run(async()=>{cfg.modules[k]=on;const{error}=await sb.from('settings').update({modules:cfg.modules}).eq('id',1);if(error)throw error});
 const setRet=()=>run(async()=>{const{error}=await sb.from('settings').update({retention_days:+v('a_ret')}).eq('id',1);if(error)throw error;await loadCfg();alert('Gespeichert')});
@@ -177,5 +195,7 @@ const addSeason=()=>run(async()=>{const{data:s,error}=await sb.from('mow_seasons
 const addMow=()=>run(async()=>{const{error}=await sb.from('mow_dates').insert({season_id:+v('m_s'),date:v('m_d'),big:$('#m_b').checked});if(error)throw error;await logIt(+v('m_s'),null,`Mähtermin ${fmt(v('m_d'))} eingetragen${$('#m_b').checked?' (große Wiese)':''}`)});
 const savePlan=y=>run(async()=>{const a=n=>v('c'+n).split(',').map(x=>+x.trim()).filter(Boolean);const{error}=await sb.from('cleaning_plans').upsert({year:y,w1:a(1),w2:a(2),w3:a(3)});if(error)throw error;alert('Plan gespeichert.')});
 
+const setY=y=>{admY=+y;draw()};
+const carry=y=>run(async()=>{const{data:p}=await sb.from('cleaning_plans').select().eq('year',y-1).maybeSingle();if(!p)throw new Error('Für '+(y-1)+' gibt es keinen Plan.');const G=[p.w1,p.w2,p.w3],N=weeksIn(y-1);const{error}=await sb.from('cleaning_plans').upsert({year:y,w1:G[N%3],w2:G[(N+1)%3],w3:G[(N+2)%3]});if(error)throw error;alert('Turnus aus '+(y-1)+' fortgeschrieben.')});
 init();
 </script></body></html>
