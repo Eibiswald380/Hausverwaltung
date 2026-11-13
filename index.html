@@ -77,7 +77,7 @@ async function init(){
   const{data:{session}}=await sb.auth.getSession();
   if(!session)return loginView();
   const{data:p}=await sb.from('profiles').select().eq('id',session.user.id).single();
-  me=p;await sb.rpc('cleanup_expired');await loadCfg();await loadSeen();
+  me=p;await Promise.all([sb.rpc('cleanup_expired'),loadCfg(),loadSeen()]);
   sb.channel('s').on('postgres_changes',{event:'*',schema:'public',table:'settings'},async()=>{await loadCfg();draw()}).subscribe();
   draw();
 }
@@ -106,14 +106,16 @@ async function draw(keep=true){
   const tk=++drawTk,y=window.scrollY;
   const tabs=[['home','Start','house'],...Object.entries(MODS).filter(([k])=>cfg.modules[k]).map(([k,m])=>[k,m[0],m[1]]),...(isAdmin()?[['admin','Admin','settings']]:[])];
   if(!tabs.some(t=>t[0]===view))view='home';
+  const cntP=cfg.modules.board&&view!=='board'?Promise.resolve(sb.from('posts').select('id',{count:'exact',head:true}).gt('created_at',seenAt).neq('author',me.id)):null;
+  $('#app').style.opacity='.6';
   let html;try{html=await views[view]()}catch(x){html=card('triangle-alert','Fehler',`<p>${e(x.message||x)}</p>`)}
   let unread=0;
-  if(cfg.modules.board){if(view==='board')await markSeen();else{const{count}=await sb.from('posts').select('id',{count:'exact',head:true}).gt('created_at',seenAt).neq('author',me.id);unread=count||0}}
+  if(cfg.modules.board){if(view==='board')await markSeen();else if(cntP){const{count}=await cntP;unread=count||0}}
   if(tk!==drawTk)return;
   $('#app').innerHTML=`<header class="bg-blue-800 text-white px-4 py-3 flex justify-between items-center sticky top-0 z-10"><div><b class="text-xl">Eibiswald 380</b><div class="text-base">Wohnung ${me.apartment}${isAdmin()?' · Haussprecher':''}</div></div><button onclick="logout()" class="flex items-center gap-1 text-base underline"><i data-lucide="log-out" class="w-5 h-5"></i>Abmelden</button></header>
   <main id="main" class="max-w-3xl mx-auto p-4 pb-44 sm:pb-28">${html}</main>
   <nav style="padding-bottom:env(safe-area-inset-bottom)" class="fixed bottom-0 inset-x-0 bg-white border-t-2 border-sky-200 grid grid-cols-4 sm:flex sm:justify-around z-10">${tabs.map(t=>`<button onclick="go('${t[0]}')" class="sm:flex-1 py-2 flex flex-col items-center text-sm font-semibold ${view===t[0]?'text-blue-800 bg-sky-100':'text-slate-600'}"><span class="relative">${I(t[2],'w-7 h-7')}${t[0]==='board'&&unread?`<span class="absolute -top-1 -right-3 min-w-[1.4rem] h-[1.4rem] px-1 rounded-full bg-red-600 text-white text-sm font-bold flex items-center justify-center border-2 border-white">${unread>9?'9+':unread}</span>`:''}</span>${t[1]}</button>`).join('')}</nav>`;
-  lucide.createIcons();window.scrollTo(0,keep?y:0);
+  $('#app').style.opacity='';lucide.createIcons();window.scrollTo(0,keep?y:0);
 }
 
 /* ---------- Reinigung (Hilfsfunktionen) ---------- */
@@ -133,14 +135,21 @@ const cs=k=>`${I(CS[k][1],'w-4 h-4 inline -mt-1')} ${CS[k][2]}`;
 views.home=async()=>{
   const g=greet(),t=today(),items=[];let ann='',cl='',py='',evh='',vh='',bh='';
   const hd=`<h1 class="flex items-center gap-3 text-3xl font-extrabold text-blue-900 mb-4">${I(g[0],'w-9 h-9 shrink-0')}<span>${g[1]}, Wohnung ${me.apartment}!</span></h1>`;
-  const{data:an}=await sb.from('announcements').select().gt('expires_at',new Date().toISOString()).order('created_at',{ascending:false});
+  const R_=x=>Promise.resolve(x),cy0=isoY(new Date()),needNext=Date.now()>=wStart(cy0+1,1).getTime()-30*864e5;
+  const pAn=R_(sb.from('announcements').select().gt('expires_at',new Date().toISOString()).order('created_at',{ascending:false}));
+  const pNp=cfg.modules.board?R_(sb.from('posts').select().gt('created_at',seenAt).neq('author',me.id).order('created_at',{ascending:false}).limit(5)):null;
+  const pVo=cfg.modules.votes?Promise.all([R_(sb.from('votes').select().order('ends_at')),R_(sb.from('vote_options').select().order('position')),R_(sb.from('vote_answers').select().eq('apartment',me.apartment))]):null;
+  const pCl=cfg.modules.clean?Promise.all([cleanData(cy0),needNext?cleanData(cy0+1):null]):null;
+  const pMd={};for(const m of [MC.mow,MC.winter])if(cfg.modules[m.k]){const k=m.k;pMd[k]=Promise.all([R_(sb.from(k+'_dates').select(`*,${k}_seasons(closed)`).gte('date',t).order('date').limit(3)),R_(sb.from(k+'_payments').select(`*,${k}_seasons(*)`).eq('apartment',me.apartment).neq('status','confirmed'))])}
+  const pEv=cfg.modules.events?Promise.all([R_(sb.from('events').select().gte('date',t).order('date').limit(5)),R_(sb.from('event_rsvps').select().eq('apartment',me.apartment))]):null;
+  const{data:an}=await pAn;
   (an||[]).forEach(x=>ann+=`<div class="rounded-2xl border-4 border-amber-500 bg-amber-50 p-5 mb-4"><h2 class="flex items-center gap-2 text-2xl font-extrabold text-amber-900">${I('megaphone','w-8 h-8 shrink-0')}<span>${e(x.title)}</span></h2><p class="whitespace-pre-line mt-2">${e(x.body)}</p><p class="text-base text-slate-600 mt-2">Wichtige Mitteilung des Haussprechers · ${fmt(x.created_at)}</p></div>`);
   if(cfg.modules.board){
-    const{data:np}=await sb.from('posts').select().gt('created_at',seenAt).neq('author',me.id).order('created_at',{ascending:false}).limit(5);
+    const{data:np}=await pNp;
     if(np?.length)bh=card('clipboard-list','Neu am Schwarzen Brett',np.map(x=>`<div class="py-3 border-b"><p class="font-bold">${e(x.title)}</p>${x.body?`<p class="whitespace-pre-line">${e(x.body.length>160?x.body.slice(0,160)+'…':x.body)}</p>`:''}${fileLink(x.file_url)}<p class="text-base text-slate-600">Wohnung ${x.author_apt} · ${fmt(x.created_at)}</p></div>`).join('')+`<button class="btn mt-3" onclick="go('board')">${I('clipboard-list')} Zum Schwarzen Brett</button>`);
   }
   if(cfg.modules.votes){
-    const[{data:vs},{data:op},{data:an2}]=await Promise.all([sb.from('votes').select().order('ends_at'),sb.from('vote_options').select().order('position'),sb.from('vote_answers').select().eq('apartment',me.apartment)]);
+    const[{data:vs},{data:op},{data:an2}]=await pVo;
     const now=Date.now(),act=(vs||[]).filter(x=>new Date(x.ends_at)>now),O=id=>(op||[]).filter(o=>o.vote_id===id),mine=id=>(an2||[]).filter(a=>a.vote_id===id).map(a=>a.option_id);
     act.forEach(x=>items.push([x.ends_at,'vote',`Abstimmung endet: ${e(x.title)} (${ft(x.ends_at)} Uhr)`]));
     const todo=act.filter(x=>!mine(x.id).length);
@@ -152,22 +161,22 @@ views.home=async()=>{
   if(cfg.modules.clean){
     const cy=isoY(new Date());let rows='',found=false,any=false;
     for(const y of [cy,cy+1]){if(found)break;if(y>cy&&Date.now()<wStart(y,1).getTime()-30*864e5)break;
-      const c=await cleanData(y);if(!c.p)continue;any=true;
+      const c=(await pCl)[y>cy?1:0];if(!c||!c.p)continue;any=true;
       for(let w=1;w<=weeksIn(c.y)&&!found;w++){if(!grp(c.p,w).includes(me.apartment))continue;const s=cleanStatus(c,w,me.apartment);if(s==='done')continue;if(s==='future')found=true;
         items.push([wStart(c.y,w).toISOString().slice(0,10),'spray-can',`Reinigung KW ${w}${s==='over'?' (überfällig)':''}`]);
         rows+=`<div class="py-2 border-b"><div class="flex items-center justify-between gap-2 flex-wrap"><span class="chip ${CS[s][0]}">KW ${w}: ${cs(s)}</span>${s!=='future'?`<span class="flex items-center gap-3"><span class="text-xl font-bold">Erledigt?</span><button class="btn btn-ok" onclick="cDone(${c.y},${w},${me.apartment})">Ja</button></span>`:''}</div><div class="text-base text-slate-600">${wr(c.y,w)}</div></div>`}}
     cl=card('spray-can','Meine Reinigung',rows||(any?`<p class="flex items-center gap-2 text-green-800 font-semibold">${I('circle-check','w-6 h-6')} Alles erledigt</p>`:'<p>Kein Plan hinterlegt.</p>'));
   }
   for(const m of [MC.mow,MC.winter]){if(!cfg.modules[m.k])continue;const k=m.k;
-    const{data:md}=await sb.from(k+'_dates').select(`*,${k}_seasons(closed)`).gte('date',t).order('date').limit(3);
+    const[{data:md},{data:pay0}]=await pMd[k];
     (md||[]).filter(x=>!x[k+'_seasons']?.closed).forEach(x=>items.push([x.date,m.ic,`${m.n}${m.big&&x.big?' (große Wiese)':''}`]));
-    const{data:pay0}=await sb.from(k+'_payments').select(`*,${k}_seasons(*)`).eq('apartment',me.apartment).neq('status','confirmed');const pay=(pay0||[]).filter(x=>!x[k+'_seasons']?.closed);
+    const pay=(pay0||[]).filter(x=>!x[k+'_seasons']?.closed);
     if(pay.length){pay.filter(x=>x.status==='open').forEach(x=>items.push([x[k+'_seasons'].due_date,'banknote',`${m.n}: ${eur(x[k+'_seasons'].price)} fällig`]));
       py+=card('banknote',`${m.n}: offene Zahlungen`,pay.map(x=>{const s=x[k+'_seasons'],late=s.due_date<t&&x.status==='open';
       return`<div class="py-3 border-b"><p class="text-2xl font-extrabold ${late?'text-red-700':'text-blue-900'}">${eur(s.price)} <span class="text-base font-normal">${e(s.name)} · fällig ${fmt(s.due_date)}</span></p>${late?`<p class="text-red-700 font-bold">${I('triangle-alert','w-5 h-5 inline')} Überfällig</p>`:''}${x.status==='open'?`<div class="flex gap-2 flex-wrap mt-2"><button class="btn" onclick="payRep('${k}',${x.id},${s.id},'cash')">In bar übergeben</button><button class="btn btn2" onclick="payRep('${k}',${x.id},${s.id},'deposit')">Hinterlegt</button></div>`:`<p class="mt-1">${ps(x.status)}${x.deposit_place?' Ort: '+e(x.deposit_place):''}</p>`}</div>`}).join(''))}
   }
   if(cfg.modules.events){
-    const[{data:ev},{data:rs}]=await Promise.all([sb.from('events').select().gte('date',t).order('date').limit(5),sb.from('event_rsvps').select().eq('apartment',me.apartment)]);
+    const[{data:ev},{data:rs}]=await pEv;
     if(ev?.length)evh=card('calendar-days','Veranstaltungen',ev.map(x=>{const g=(rs||[]).find(q=>q.event_id===x.id)?.going;
       return`<div class="py-3 border-b"><p class="font-bold">${fmt(x.date)} ${e(x.time?.slice(0,5)||'')} · ${e(x.title)}${x.place?` <span class="inline-flex items-center gap-1 font-normal text-slate-700">${I('map-pin','w-4 h-4')} ${e(x.place)}</span>`:''}</p>${g===undefined?`<div class="flex gap-2 flex-wrap mt-2"><button class="btn btn-ok" onclick="rsvp(${x.id},true)">${I('check')} Wir sind dabei</button><button class="btn btn2" onclick="rsvp(${x.id},false)">${I('x')} Nicht dabei</button></div>`:`<p class="mt-1"><span class="chip ${g?'bg-green-100 text-green-900':'bg-slate-200 text-slate-800'}">${I(g?'check':'x','w-4 h-4 inline -mt-1')} ${g?'Zugesagt':'Abgesagt'}</span></p>`}</div>`}).join(''));
     (ev||[]).forEach(x=>items.push([x.date,'calendar-days',`${e(x.title)} ${e(x.time?.slice(0,5)||'')}${x.place?' · '+e(x.place):''}`]));
