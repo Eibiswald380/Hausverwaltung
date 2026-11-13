@@ -10,6 +10,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Eibiswald 380">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<script>window.addEventListener('error',function(e){if(!e.message)return;var a=document.getElementById('app');if(a&&!a.innerHTML.trim())a.innerHTML='<div style="font:17px/1.5 Arial,sans-serif;padding:24px;max-width:32rem;margin:2rem auto"><h2 style="color:#1e40af;margin:0 0 10px">Die App konnte nicht starten</h2><p>Technischer Fehler:<br><b>'+String(e.message).replace(/</g,'&lt;')+'</b><br>'+String(e.filename||'').split('/').pop()+(e.lineno?' (Zeile '+e.lineno+')':'')+'</p></div>'});</script>
+<script src="config.js"></script>
 <script src="https://cdn.tailwindcss.com/3.4.17"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
@@ -32,8 +34,15 @@ input[type=file].inp{font-size:1rem}
 </style></head>
 <body class="bg-sky-50 text-slate-900 text-lg"><div id="app"></div>
 <script>
-const SB_URL='https://evhqnnvfvaruxhmagivs.supabase.co', SB_KEY='sb_publishable_CHR3dfwNom3eyGOMztGr4w_jmO2dD2D';
-const sb=supabase.createClient(SB_URL,SB_KEY);
+const CFG=window.APP_CONFIG||{},SB_URL=CFG.SB_URL||'',SB_KEY=CFG.SB_KEY||'';
+function fatal(m){document.getElementById('app').innerHTML='<div style="max-width:30rem;margin:3rem auto;padding:1.5rem;font:18px/1.5 Arial,sans-serif;color:#0f172a"><h1 style="font-size:26px;color:#1e40af;margin:0 0 12px">Die App konnte nicht starten</h1><p>'+m+'</p><button onclick="location.reload()" style="margin-top:12px;padding:12px 22px;font-size:18px;border-radius:12px;border:0;background:#1d4ed8;color:#fff">Neu laden</button></div>'}
+const blank=()=>!document.getElementById('app').innerHTML.trim();
+window.addEventListener('unhandledrejection',x=>{if(blank())fatal('Fehler beim Laden: '+(x.reason&&x.reason.message||x.reason))});
+window.addEventListener('error',x=>{if(blank())fatal('Fehler beim Laden: '+x.message)});
+let sb=null;
+if(SB_URL&&SB_KEY&&!SB_URL.startsWith('DEINE')&&!SB_KEY.startsWith('DEIN')&&!/^https:\/\/[^\s\/]+/.test(SB_URL))fatal('Die Supabase-Adresse <b>SB_URL</b> ist ungültig: <b>'+SB_URL.replace(/</g,'&lt;')+'</b><br>Sie muss mit <b>https://</b> beginnen, zum Beispiel https://abcdefgh.supabase.co');
+else if(!SB_URL||!SB_KEY||SB_URL.startsWith('DEINE')||SB_KEY.startsWith('DEIN'))fatal('Die Datei <b>config.js</b> fehlt oder ist noch nicht ausgefüllt. Sie muss im selben Ordner wie <b>index.html</b> liegen und die Supabase-Adresse (SB_URL) und den anon-Schlüssel (SB_KEY) enthalten.');
+else try{sb=supabase.createClient(SB_URL,SB_KEY)}catch(x){fatal('Die Verbindung zu Supabase konnte nicht gestartet werden: '+x.message)}
 let me,cfg,view='home',admY,seenAt=new Date().toISOString();
 const $=s=>document.querySelector(s);
 const e=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -358,5 +367,5 @@ async function pdfPlan(y){
   doc.autoTable({head:[['KW','Zeitraum','Wohnungen','Erledigt von']],body:rows,startY:22,styles:{fontSize:10},headStyles:{fillColor:[30,64,175]}});
   doc.save('Reinigungsplan-'+y+'.pdf');
 }
-init();
+if(sb)init().catch(x=>fatal('Fehler beim Start: '+(x&&x.message||x)));
 </script></body></html>
